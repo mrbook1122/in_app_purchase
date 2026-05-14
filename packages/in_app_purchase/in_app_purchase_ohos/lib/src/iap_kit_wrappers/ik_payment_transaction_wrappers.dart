@@ -85,6 +85,7 @@ class IKPaymentTransactionWrapper {
     this.originalTransaction,
     this.transactionTimeStamp,
     this.transactionIdentifier,
+    this.verificationData,
     this.error,
   });
 
@@ -134,6 +135,9 @@ class IKPaymentTransactionWrapper {
   /// The value is `null` if it is an unsuccessful transaction.
   final String? transactionIdentifier;
 
+  /// 鸿蒙 IAP 验单所需的订单凭据 JSON。
+  final String? verificationData;
+
   /// The error object
   ///
   /// Only available if the [transactionState] is
@@ -154,12 +158,19 @@ class IKPaymentTransactionWrapper {
         other.originalTransaction == originalTransaction &&
         other.transactionTimeStamp == transactionTimeStamp &&
         other.transactionIdentifier == transactionIdentifier &&
+        other.verificationData == verificationData &&
         other.error == error;
   }
 
   @override
-  int get hashCode => Object.hash(payment, transactionState,
-      originalTransaction, transactionTimeStamp, transactionIdentifier, error);
+  int get hashCode => Object.hash(
+      payment,
+      transactionState,
+      originalTransaction,
+      transactionTimeStamp,
+      transactionIdentifier,
+      verificationData,
+      error);
 
   @override
   String toString() => _$IKPaymentTransactionWrapperToJson(this).toString();

@@ -151,19 +151,26 @@ export class MethodCallHandlerImpl implements MethodCallHandler {
           let jwsSubscriptionStatus: string = JSON.parse(createPurchaseResult.purchaseData).jwsSubscriptionStatus;
           let purchaseStr = JWTUtil.decodeJwtObj(jwsSubscriptionStatus);
           let purchaseOrderPayload = JSON.parse(purchaseStr) as PurchaseSubGroupStatusPayload;
+          let subscriptionStatus = purchaseOrderPayload.lastSubscriptionStatus;
+          let purchaseOrderId: string = subscriptionStatus?.lastPurchaseOrder?.purchaseOrderId ?? '';
+          let purchaseToken: string =
+            subscriptionStatus?.purchaseToken ?? subscriptionStatus?.lastPurchaseOrder?.purchaseToken ?? '';
           let map: Map<string, Any> = new Map();
           map.set('payment', args)
-          map.set('transactionIdentifier',
-            purchaseOrderPayload.lastSubscriptionStatus?.lastPurchaseOrder.purchaseOrderId)
+          map.set('transactionIdentifier', purchaseOrderId)
+          map.set('verificationData', this.buildVerificationData(purchaseOrderId, purchaseToken))
           map.set('transactionState', TransactionState.purchased)
           this.observer?.invokeMethod('updatedTransactions', [map])
         } else if (type == iap.ProductType.CONSUMABLE || type == iap.ProductType.NONCONSUMABLE) {
           let jwsPurchaseOrder: string = JSON.parse(createPurchaseResult.purchaseData).jwsPurchaseOrder;
           let purchaseStr = JWTUtil.decodeJwtObj(jwsPurchaseOrder);
           let purchaseOrderPayload = JSON.parse(purchaseStr) as PurchaseOrderPayload;
+          let purchaseOrderId: string = purchaseOrderPayload.purchaseOrderId;
+          let purchaseToken: string = purchaseOrderPayload.purchaseToken;
           let map: Map<string, Any> = new Map();
           map.set('payment', args)
-          map.set('transactionIdentifier', purchaseOrderPayload.purchaseOrderId)
+          map.set('transactionIdentifier', purchaseOrderId)
+          map.set('verificationData', this.buildVerificationData(purchaseOrderId, purchaseToken))
           map.set('transactionState', TransactionState.purchased)
           this.observer?.invokeMethod('updatedTransactions', [map])
         }
@@ -191,6 +198,14 @@ export class MethodCallHandlerImpl implements MethodCallHandler {
     map.set('payment', args)
     map.set('transactionState', TransactionState.failed)
     this.observer?.invokeMethod('updatedTransactions', [map])
+  }
+
+  // 组装服务端验单所需的华为订单凭据，Flutter 侧会原样透传给后端。
+  buildVerificationData(purchaseOrderId: string | undefined, purchaseToken: string | undefined): string {
+    return JSON.stringify({
+      purchaseOrderId: purchaseOrderId ?? '',
+      purchaseToken: purchaseToken ?? ''
+    })
   }
 
   finishPurchase(productType: iap.ProductType, purchaseToken: string, purchaseOrderId: string, result?: MethodResult) {

@@ -18,6 +18,7 @@ IKPaymentTransactionWrapper _$IKPaymentTransactionWrapperFromJson(Map json) =>
               Map<String, dynamic>.from(json['originalTransaction'] as Map)),
       transactionTimeStamp: (json['transactionTimeStamp'] as num?)?.toDouble(),
       transactionIdentifier: json['transactionIdentifier'] as String?,
+      verificationData: json['verificationData'] as String?,
       error: json['error'] == null
           ? null
           : IKError.fromJson(Map<String, dynamic>.from(json['error'] as Map)),
@@ -32,5 +33,6 @@ Map<String, dynamic> _$IKPaymentTransactionWrapperToJson(
       'originalTransaction': instance.originalTransaction,
       'transactionTimeStamp': instance.transactionTimeStamp,
       'transactionIdentifier': instance.transactionIdentifier,
+      'verificationData': instance.verificationData,
       'error': instance.error,
     };

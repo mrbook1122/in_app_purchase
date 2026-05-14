@@ -29,6 +29,10 @@ class AppGalleryPurchaseDetails extends PurchaseDetails {
     String base64EncodedReceipt,
   ) {
     print('MethodCallHandlerImpl AppGalleryPurchaseDetails.fromIKTransaction ');
+    final String verificationData =
+        transaction.verificationData?.isNotEmpty == true
+            ? transaction.verificationData!
+            : base64EncodedReceipt;
     final AppGalleryPurchaseDetails purchaseDetails = AppGalleryPurchaseDetails(
       productID: transaction.payment.productId,
       purchaseID: transaction.transactionIdentifier,
@@ -39,8 +43,8 @@ class AppGalleryPurchaseDetails extends PurchaseDetails {
           ? (transaction.transactionTimeStamp! * 1000).toInt().toString()
           : null,
       verificationData: PurchaseVerificationData(
-          localVerificationData: base64EncodedReceipt,
-          serverVerificationData: base64EncodedReceipt,
+          localVerificationData: verificationData,
+          serverVerificationData: verificationData,
           source: kIAPSource),
     );
     var statuus = purchaseDetails.status;
