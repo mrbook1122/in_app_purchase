@@ -34,6 +34,12 @@ export class IKError {
   userInfo: Map<String, Any> = new Map()
 }
 
+interface FinishPurchaseCredential {
+  purchaseOrderId?: string;
+  purchaseToken?: string;
+  productType?: number;
+}
+
 export class MethodCallHandlerImpl implements MethodCallHandler {
   private context: common.UIAbilityContext | null = null
   private methodChannel: MethodChannel
@@ -158,7 +164,7 @@ export class MethodCallHandlerImpl implements MethodCallHandler {
           let map: Map<string, Any> = new Map();
           map.set('payment', args)
           map.set('transactionIdentifier', purchaseOrderId)
-          map.set('verificationData', this.buildVerificationData(purchaseOrderId, purchaseToken))
+          map.set('verificationData', this.buildVerificationData(purchaseOrderId, purchaseToken, type))
           map.set('transactionState', TransactionState.purchased)
           this.observer?.invokeMethod('updatedTransactions', [map])
         } else if (type == iap.ProductType.CONSUMABLE || type == iap.ProductType.NONCONSUMABLE) {
@@ -170,7 +176,7 @@ export class MethodCallHandlerImpl implements MethodCallHandler {
           let map: Map<string, Any> = new Map();
           map.set('payment', args)
           map.set('transactionIdentifier', purchaseOrderId)
-          map.set('verificationData', this.buildVerificationData(purchaseOrderId, purchaseToken))
+          map.set('verificationData', this.buildVerificationData(purchaseOrderId, purchaseToken, type))
           map.set('transactionState', TransactionState.purchased)
           this.observer?.invokeMethod('updatedTransactions', [map])
         }
@@ -201,10 +207,15 @@ export class MethodCallHandlerImpl implements MethodCallHandler {
   }
 
   // 组装服务端验单所需的华为订单凭据，Flutter 侧会原样透传给后端。
-  buildVerificationData(purchaseOrderId: string | undefined, purchaseToken: string | undefined): string {
+  buildVerificationData(
+    purchaseOrderId: string | undefined,
+    purchaseToken: string | undefined,
+    productType: number | undefined
+  ): string {
     return JSON.stringify({
       purchaseOrderId: purchaseOrderId ?? '',
-      purchaseToken: purchaseToken ?? ''
+      purchaseToken: purchaseToken ?? '',
+      productType: productType
     })
   }
 
@@ -281,16 +292,60 @@ export class MethodCallHandlerImpl implements MethodCallHandler {
   iapFinishPurchase(call: MethodCall, result: MethodResult) {
     let finishPurchaseMap: Map<string, Object> = call.args as Map<string, Object>
     let productIdentifier: string = finishPurchaseMap.get('productIdentifier') as string
+    let verificationData: string | undefined = finishPurchaseMap.get('verificationData') as string | undefined
+    // 优先使用当前交易回调携带的订单凭据完成购买，避免再次查询未完成订单为空。
+    if (this.finishPurchaseWithCredential(verificationData, result)) {
+      return
+    }
+
     let product: iap.Product = this.productDetailsMap.get(productIdentifier)
-    // let productType: string = finishPurchaseMap.get('productType') as string
-    let productType: iap.ProductType = product.type
     if (!product) {
       Log.i(TAG, `Failed to get productType.`);
       result.error('UNAVAILABLE', 'productType is null!', null);
       return;
     } else {
+      let productType: iap.ProductType = product.type
+      // 兼容旧交易：凭据缺少 productType 时，用商品缓存补齐后直接完成。
+      if (this.finishPurchaseWithCredential(verificationData, result, productType)) {
+        return
+      }
+      // 仍缺少可用凭据时，沿用原来的未完成订单查询逻辑。
       this.queryPurchasesAsync(productType, result);
     }
+  }
+
+  finishPurchaseWithCredential(
+    verificationData: string | undefined,
+    result: MethodResult,
+    fallbackProductType?: iap.ProductType
+  ): boolean {
+    if (!verificationData) {
+      return false
+    }
+    try {
+      let credential = JSON.parse(verificationData) as FinishPurchaseCredential
+      let productType: number | undefined = this.isSupportedProductType(credential.productType) ?
+        credential.productType : fallbackProductType
+      if (!credential.purchaseOrderId || !credential.purchaseToken || !this.isSupportedProductType(productType)) {
+        return false
+      }
+      this.finishPurchase(
+        productType as iap.ProductType,
+        credential.purchaseToken,
+        credential.purchaseOrderId,
+        result
+      )
+      return true
+    } catch (err) {
+      Log.e(TAG, `Failed to parse finish purchase credential. err: ${JSON.stringify(err)}`);
+      return false
+    }
+  }
+
+  isSupportedProductType(productType: number | undefined): boolean {
+    return productType == iap.ProductType.CONSUMABLE ||
+      productType == iap.ProductType.NONCONSUMABLE ||
+      productType == iap.ProductType.AUTORENEWABLE
   }
 
   startObserver() {

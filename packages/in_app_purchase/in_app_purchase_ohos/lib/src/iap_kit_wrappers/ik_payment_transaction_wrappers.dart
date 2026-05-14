@@ -179,5 +179,6 @@ class IKPaymentTransactionWrapper {
   Map<String, String?> toFinishMap() => <String, String?>{
         'transactionIdentifier': transactionIdentifier,
         'productIdentifier': payment.productId,
+        'verificationData': verificationData,
       };
 }
