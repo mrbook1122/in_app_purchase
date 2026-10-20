@@ -82,15 +82,15 @@ class InAppPurchaseOhosPlatform extends InAppPurchasePlatform {
   }
 
   @override
-  Future<void> completePurchase(PurchaseDetails purchase) {
+  Future<void> completePurchase(PurchaseDetails purchase) async {
     assert(
       purchase is AppGalleryPurchaseDetails,
       'On ohos, the `purchase` should always be of type `AppGalleryPurchaseDetails`.',
     );
 
-    return _skPaymentQueueWrapper.finishTransaction(
-      (purchase as AppGalleryPurchaseDetails).ikPaymentTransaction,
-    );
+    final AppGalleryPurchaseDetails details = purchase as AppGalleryPurchaseDetails;
+    await _skPaymentQueueWrapper.finishTransaction(details.ikPaymentTransaction);
+    details.markPurchaseComplete();
   }
 
   @override

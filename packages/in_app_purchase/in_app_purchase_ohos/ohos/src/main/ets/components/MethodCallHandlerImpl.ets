@@ -38,6 +38,7 @@ interface FinishPurchaseCredential {
   purchaseOrderId?: string;
   purchaseToken?: string;
   productType?: number;
+  productId?: string;
 }
 
 export class MethodCallHandlerImpl implements MethodCallHandler {
@@ -164,7 +165,8 @@ export class MethodCallHandlerImpl implements MethodCallHandler {
           let map: Map<string, Any> = new Map();
           map.set('payment', args)
           map.set('transactionIdentifier', purchaseOrderId)
-          map.set('verificationData', this.buildVerificationData(purchaseOrderId, purchaseToken, type))
+          this.setPurchaseTime(map, subscriptionStatus?.lastPurchaseOrder?.purchaseTime)
+          map.set('verificationData', this.buildVerificationData(purchaseOrderId, purchaseToken, type, id))
           map.set('transactionState', TransactionState.purchased)
           this.observer?.invokeMethod('updatedTransactions', [map])
         } else if (type == iap.ProductType.CONSUMABLE || type == iap.ProductType.NONCONSUMABLE) {
@@ -176,7 +178,8 @@ export class MethodCallHandlerImpl implements MethodCallHandler {
           let map: Map<string, Any> = new Map();
           map.set('payment', args)
           map.set('transactionIdentifier', purchaseOrderId)
-          map.set('verificationData', this.buildVerificationData(purchaseOrderId, purchaseToken, type))
+          this.setPurchaseTime(map, purchaseOrderPayload.purchaseTime)
+          map.set('verificationData', this.buildVerificationData(purchaseOrderId, purchaseToken, type, id))
           map.set('transactionState', TransactionState.purchased)
           this.observer?.invokeMethod('updatedTransactions', [map])
         }
@@ -210,135 +213,175 @@ export class MethodCallHandlerImpl implements MethodCallHandler {
   buildVerificationData(
     purchaseOrderId: string | undefined,
     purchaseToken: string | undefined,
-    productType: number | undefined
+    productType: number | undefined,
+    productId?: string
   ): string {
     return JSON.stringify({
       purchaseOrderId: purchaseOrderId ?? '',
       purchaseToken: purchaseToken ?? '',
-      productType: productType
+      productType: productType,
+      productId: productId
     })
   }
 
-  finishPurchase(productType: iap.ProductType, purchaseToken: string, purchaseOrderId: string, result?: MethodResult) {
-    let finishPurchaseParam: iap.FinishPurchaseParameter = {
-      productType: productType,
-      purchaseToken: purchaseToken,
-      purchaseOrderId: purchaseOrderId
+  // PurchaseOrder.purchaseTime is milliseconds; the Dart wrapper expects seconds.
+  private setPurchaseTime(transaction: Map<string, Any>, purchaseTime: number | undefined): void {
+    if (typeof purchaseTime === 'number' && Number.isFinite(purchaseTime) && purchaseTime > 0) {
+      transaction.set('transactionTimeStamp', purchaseTime / 1000);
+    }
+  }
+
+  private async finishPurchase(credential: FinishPurchaseCredential): Promise<void> {
+    if (this.context === null) {
+      throw new Error('IAP ability context is unavailable.');
+    }
+    const parameter: iap.FinishPurchaseParameter = {
+      productType: credential.productType as iap.ProductType,
+      purchaseToken: credential.purchaseToken as string,
+      purchaseOrderId: credential.purchaseOrderId as string
     };
-    iap.finishPurchase(this.context, finishPurchaseParam).then(() => {
-      Log.i(TAG, 'Succeeded in finishing purchase.');
-      result?.success(true);
-    }).catch((err: BusinessError) => {
-      Log.e(TAG, `Failed to finish purchase. Code is ${err.code}, message is ${err.message}`);
-      result?.error('' + err.code, err.message, err);
-    });
-  }
-
-  queryPurchasesAsync(productType: iap.ProductType, result: MethodResult) {
-    let param: iap.QueryPurchasesParameter = {
-      productType: productType,
-      queryType: iap.PurchaseQueryType.UNFINISHED
-    };
-    iap.queryPurchases(this.context, param).then((res: iap.QueryPurchaseResult) => {
-      let purchaseDataList: string[] = res.purchaseDataList;
-      if (purchaseDataList === undefined || purchaseDataList.length <= 0) {
-        /* 购买成功后， 查询不到购买订单 返回失败. */
-        Log.i(TAG, 'queryPurchases, purchaseDataList empty');
-        result.error('UNAVAILABLE', 'purchaseDataList empty!', null);
-        return;
+    try {
+      await iap.finishPurchase(this.context as common.UIAbilityContext, parameter);
+    } catch (err) {
+      const error = err as BusinessError;
+      // Only this documented response proves the exact order is already delivered.
+      // Do not treat an empty query, network error or unpaid order as success.
+      if (error.code !== iap.IAPErrorCode.PURCHASE_FINISHED) {
+        throw error as Error;
       }
-      this.purchaseCompletionByTypeProcessing(purchaseDataList, result)
-    }).catch((err: BusinessError) => {
-      Log.e(TAG, `Failed to query purchases. Code is ${err.code}, message is ${err.message}`);
-      result.error('' + err.code, err.message, err);
-    });
-  }
-
-  purchaseCompletionByTypeProcessing(purchaseDataList: string[], result: MethodResult) {
-    for (let i = 0; i < purchaseDataList.length; i++) {
-      let purchaseData = purchaseDataList[i];
-      let type: number = JSON.parse(purchaseData).type
-      let purchaseToken = ''
-      let purchaseOrderId = ''
-      //自动订阅类型
-      if (type == iap.ProductType.AUTORENEWABLE) {
-        let jwsSubscriptionStatus = (JSON.parse(purchaseData) as PurchaseData).jwsSubscriptionStatus;
-        if (!jwsSubscriptionStatus) {
-          Log.e(TAG, 'queryPurchases, jwsSubscriptionStatus invalid');
-          continue;
-        }
-        let purchaseStr = JWTUtil.decodeJwtObj(jwsSubscriptionStatus);
-        let purchaseOrderPayload = JSON.parse(purchaseStr) as PurchaseSubGroupStatusPayload;
-        if (purchaseOrderPayload.lastSubscriptionStatus) {
-          purchaseToken = purchaseOrderPayload.lastSubscriptionStatus.purchaseToken
-          purchaseOrderId = purchaseOrderPayload.lastSubscriptionStatus.lastPurchaseOrder.purchaseOrderId
-        }
-      } else {
-        //非自动订阅类型
-        let jwsPurchaseOrder = (JSON.parse(purchaseData) as PurchaseData).jwsPurchaseOrder;
-        if (!jwsPurchaseOrder) {
-          Log.e(TAG, 'queryPurchases, jwsPurchaseOrder invalid');
-          continue;
-        }
-        let purchaseStr = JWTUtil.decodeJwtObj(jwsPurchaseOrder);
-        let purchaseOrderPayload = JSON.parse(purchaseStr) as PurchaseOrderPayload;
-        purchaseToken = purchaseOrderPayload.purchaseToken
-        purchaseOrderId = purchaseOrderPayload.purchaseOrderId
-      }
-      this.finishPurchase(type, purchaseToken, purchaseOrderId, result);
+      Log.i(TAG, 'Purchase already finished.');
     }
   }
 
-  iapFinishPurchase(call: MethodCall, result: MethodResult) {
-    let finishPurchaseMap: Map<string, Object> = call.args as Map<string, Object>
-    let productIdentifier: string = finishPurchaseMap.get('productIdentifier') as string
-    let verificationData: string | undefined = finishPurchaseMap.get('verificationData') as string | undefined
-    // 优先使用当前交易回调携带的订单凭据完成购买，避免再次查询未完成订单为空。
-    if (this.finishPurchaseWithCredential(verificationData, result)) {
-      return
-    }
-
-    let product: iap.Product = this.productDetailsMap.get(productIdentifier)
-    if (!product) {
-      Log.i(TAG, `Failed to get productType.`);
-      result.error('UNAVAILABLE', 'productType is null!', null);
-      return;
-    } else {
-      let productType: iap.ProductType = product.type
-      // 兼容旧交易：凭据缺少 productType 时，用商品缓存补齐后直接完成。
-      if (this.finishPurchaseWithCredential(verificationData, result, productType)) {
-        return
-      }
-      // 仍缺少可用凭据时，沿用原来的未完成订单查询逻辑。
-      this.queryPurchasesAsync(productType, result);
-    }
-  }
-
-  finishPurchaseWithCredential(
-    verificationData: string | undefined,
-    result: MethodResult,
-    fallbackProductType?: iap.ProductType
-  ): boolean {
-    if (!verificationData) {
-      return false
+  private parseFinishCredential(data: string | undefined): FinishPurchaseCredential | undefined {
+    if (!data) {
+      return undefined;
     }
     try {
-      let credential = JSON.parse(verificationData) as FinishPurchaseCredential
-      let productType: number | undefined = this.isSupportedProductType(credential.productType) ?
-        credential.productType : fallbackProductType
-      if (!credential.purchaseOrderId || !credential.purchaseToken || !this.isSupportedProductType(productType)) {
-        return false
+      return JSON.parse(data) as FinishPurchaseCredential;
+    } catch (_) {
+      // Older callbacks may carry a receipt instead of credential JSON.
+      return undefined;
+    }
+  }
+
+  private isNonEmptyString(value: string | undefined): boolean {
+    return typeof value === 'string' && value.trim().length > 0;
+  }
+
+  // Legacy callbacks can lack a token. Query every page, but only finish the
+  // exact order that the caller has verified; never finish other pending orders.
+  private async findUnfinishedPurchase(
+    productType: iap.ProductType,
+    productId: string,
+    purchaseOrderId: string
+  ): Promise<FinishPurchaseCredential | undefined> {
+    if (this.context === null) {
+      throw new Error('IAP ability context is unavailable.');
+    }
+    let continuationToken: string | undefined = undefined;
+    const seenTokens = new Set<string>();
+    while (true) {
+      const parameter: iap.QueryPurchasesParameter = {
+        productType: productType,
+        queryType: iap.PurchaseQueryType.UNFINISHED
+      };
+      if (continuationToken) {
+        parameter.continuationToken = continuationToken;
       }
-      this.finishPurchase(
-        productType as iap.ProductType,
-        credential.purchaseToken,
-        credential.purchaseOrderId,
-        result
-      )
-      return true
+      const response: iap.QueryPurchaseResult = await iap.queryPurchases(this.context as common.UIAbilityContext, parameter);
+      for (const rawPurchase of response.purchaseDataList ?? []) {
+        const credential = this.matchPurchase(rawPurchase, productType, productId, purchaseOrderId);
+        if (credential) {
+          return credential;
+        }
+      }
+      const nextToken = response.continuationToken;
+      if (!nextToken) {
+        return undefined;
+      }
+      if (seenTokens.has(nextToken)) {
+        throw new Error('Repeated purchase continuation token.');
+      }
+      seenTokens.add(nextToken);
+      continuationToken = nextToken;
+    }
+  }
+
+  private matchPurchase(
+    rawPurchase: string,
+    productType: iap.ProductType,
+    productId: string,
+    purchaseOrderId: string
+  ): FinishPurchaseCredential | undefined {
+    try {
+      const data = JSON.parse(rawPurchase) as PurchaseData;
+      if (data.type !== productType) {
+        return undefined;
+      }
+      let order: PurchaseOrderPayload | undefined;
+      let purchaseToken: string | undefined;
+      if (productType === iap.ProductType.AUTORENEWABLE && data.jwsSubscriptionStatus) {
+        const payload = JSON.parse(JWTUtil.decodeJwtObj(data.jwsSubscriptionStatus)) as PurchaseSubGroupStatusPayload;
+        order = payload.lastSubscriptionStatus?.lastPurchaseOrder as PurchaseOrderPayload | undefined;
+        purchaseToken = payload.lastSubscriptionStatus?.purchaseToken || order?.purchaseToken;
+      } else if (data.jwsPurchaseOrder) {
+        order = JSON.parse(JWTUtil.decodeJwtObj(data.jwsPurchaseOrder)) as PurchaseOrderPayload;
+        purchaseToken = order.purchaseToken;
+      }
+      if (order?.purchaseOrderId !== purchaseOrderId || order?.productId !== productId ||
+        !this.isNonEmptyString(purchaseToken)) {
+        return undefined;
+      }
+      return { purchaseOrderId: purchaseOrderId, purchaseToken: purchaseToken, productType: productType,
+        productId: productId };
+    } catch (_) {
+      Log.e(TAG, 'Ignoring malformed purchase data while locating the requested order.');
+      return undefined;
+    }
+  }
+
+  async iapFinishPurchase(call: MethodCall, result: MethodResult): Promise<void> {
+    // Respond to the MethodChannel exactly once, including synchronous SDK errors.
+    try {
+      const args = call.args as Map<string, Object>;
+      const productId = args.get('productIdentifier') as string;
+      const purchaseOrderId = args.get('transactionIdentifier') as string;
+      if (!this.isNonEmptyString(productId) || !this.isNonEmptyString(purchaseOrderId)) {
+        result.error('INVALID_PURCHASE', 'Product ID and transaction ID are required.', null);
+        return;
+      }
+      let credential = this.parseFinishCredential(args.get('verificationData') as string | undefined);
+      if (credential &&
+        ((this.isNonEmptyString(credential.purchaseOrderId) && credential.purchaseOrderId !== purchaseOrderId) ||
+        (this.isNonEmptyString(credential.productId) && credential.productId !== productId))) {
+        result.error('INVALID_PURCHASE', 'Credential does not match the requested transaction.', null);
+        return;
+      }
+      const product = this.productDetailsMap.get(productId);
+      const productType = this.isSupportedProductType(credential?.productType) ?
+        credential?.productType : product?.type;
+      if (!this.isSupportedProductType(productType)) {
+        result.error('UNAVAILABLE', 'Product type unavailable; query product details before retrying.', null);
+        return;
+      }
+      if (credential?.purchaseOrderId === purchaseOrderId && this.isNonEmptyString(credential?.purchaseToken)) {
+        credential.productType = productType;
+      } else {
+        credential = await this.findUnfinishedPurchase(productType as iap.ProductType, productId, purchaseOrderId);
+      }
+      if (!credential) {
+        // Absence from UNFINISHED does not prove delivery. Keep the transaction
+        // pending so the app can reconcile with its server instead of losing it.
+        result.error('PURCHASE_NOT_FOUND', 'Requested order not found in unfinished purchases; delivery status is unknown.', null);
+        return;
+      }
+      await this.finishPurchase(credential);
+      result.success(null);
     } catch (err) {
-      Log.e(TAG, `Failed to parse finish purchase credential. err: ${JSON.stringify(err)}`);
-      return false
+      const error = err as BusinessError;
+      result.error(error.code === undefined ? 'UNAVAILABLE' : String(error.code),
+        error.message ?? 'Failed to finish purchase.', null);
     }
   }
 

@@ -47,7 +47,6 @@ class AppGalleryPurchaseDetails extends PurchaseDetails {
           serverVerificationData: verificationData,
           source: kIAPSource),
     );
-    var statuus = purchaseDetails.status;
     if (purchaseDetails.status == PurchaseStatus.error ||
         purchaseDetails.status == PurchaseStatus.canceled) {
       purchaseDetails.error = IAPError(
@@ -74,6 +73,11 @@ class AppGalleryPurchaseDetails extends PurchaseDetails {
   set status(PurchaseStatus status) {
     _pendingCompletePurchase = status == PurchaseStatus.purchased;
     _status = status;
+  }
+
+  /// Called only after the store acknowledges delivery (including already delivered).
+  void markPurchaseComplete() {
+    _pendingCompletePurchase = false;
   }
 
   bool _pendingCompletePurchase = false;
